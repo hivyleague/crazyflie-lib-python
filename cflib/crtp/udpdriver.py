@@ -20,25 +20,22 @@
 #  but WITHOUT ANY WARRANTY; without even the implied warranty of
 #  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #  GNU General Public License for more details.
-#  You should have received a copy of the GNU General Public License
-#  along with this program; if not, write to the Free Software
-#  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
-#  MA  02110-1301, USA.
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
 """ CRTP UDP Driver. Work either with the UDP server or with an UDP device
 See udpserver.py for the protocol"""
+import queue
 import re
+import socket
 import struct
+
 import sys
 import binascii
-from socket import *
+from urllib.parse import urlparse
 
 from .crtpdriver import CRTPDriver
 from .crtpstack import CRTPPacket
 from .exceptions import WrongUriType
-if sys.version_info < (3,):
-    import Queue as queue
-else:
-    import queue
 
 __author__ = 'Bitcraze AB'
 __all__ = ['UdpDriver']
@@ -57,35 +54,33 @@ class UdpDriver(CRTPDriver):
         None
 
     def connect(self, uri, linkQualityCallback, linkErrorCallback):
-        # check if the URI is a radio URI
         if not re.search('^udp://', uri):
             raise WrongUriType('Not an UDP URI')
 
+        parse = urlparse(uri)
+
         self.queue = queue.Queue()
-        self.socket = socket(AF_INET, SOCK_DGRAM)
-        self.addr = ('192.168.43.42', 2390) #7777 modify @libo
-        self.socket.bind(('', 2399))
-        self.socket.connect(self.addr)
-        str1=b'\xFF\x01\x01\x01'
-        # Add this to the server clients list
-        self.socket.sendto(str1,self.addr)
-        #print(str1)
+
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.addr = (parse.hostname, parse.port)
+        print("done parsing the address ")
+        print(parse.hostname)
+        print(parse.port)
+
+        # self.socket.connect(self.addr)
+
+        self.socket.sendto(b'\xFF\x01\x01\x01', self.addr)
+
 
     def receive_packet(self, time=0):
         data, addr = self.socket.recvfrom(1024)
         if data:
-            pk = CRTPPacket(data[0], list(data[1:(len(data)-1)]))
-            self.link_keep_alive += 1
-            if self.link_keep_alive > 10:
-                str1 = b'\xFF\x01\x01\x01'
-                self.socket.sendto(str1, self.addr)
-                self.link_keep_alive = 0
-            # data = struct.unpack('B' * (len(data) - 1), data[0:len(data) - 1])#modify @libo
-            # pk = CRTPPacket()
-            # pk.header = data[0] #modify port @libo
-            # pk.data = data[1:]
-            #print("recv: ")
-            #print(data)
+
+            data = struct.unpack('B' * (len(data) - 1), data[0:len(data) - 1])
+            pk = CRTPPacket()
+            pk.port = data[0]
+            pk.data = data[1:]
+
             return pk
 
         try:
@@ -106,18 +101,18 @@ class UdpDriver(CRTPDriver):
         for i in raw:
             cksum += i
         cksum %= 256
-        raw = raw + (cksum,)
-        data = ''.join(chr(v) for v in raw )
-        self.socket.sendto(data.encode('latin'), self.addr)
-        self.link_keep_alive = 0
-        #print("send: ")
-        #print(data.encode('latin'))
+
+        data = ''.join(chr(v) for v in (raw + (cksum,)))
+
+        # print tuple(data)
+        self.socket.sendto(data.encode('latin1'), self.addr)
+
 
     def close(self):
         str1=b'\xFF\x01\x01\x01'
         # Remove this from the server clients list
-        self.socket.sendto(str1, self.addr)
-        self.socket.close()
+
+        self.socket.sendto('\xFF\x01\x02\x02'.encode(), self.addr)
 
     def get_name(self):
         return 'udp'
